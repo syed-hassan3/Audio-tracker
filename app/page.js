@@ -43,9 +43,12 @@ export default function AudioRecorder() {
   // Speech-to-text via Web Speech API
   const [transcript, setTranscript] = useState("");
   const [isSttSupported, sttCtor] = useMemo(() => {
+    if (typeof window === "undefined") return [false, null];
     const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
-    return [SR, SR];
+    // isSttSupported is a boolean now; sttCtor is the constructor or null
+    return [Boolean(SR), SR || null];
   }, []);
+
   const recognitionRef = useRef(null);
 
   // Clean up object URLs on unmount or when changing recordings
@@ -59,13 +62,14 @@ export default function AudioRecorder() {
   }, [audioUrl]);
 
   function startTimer() {
-    if (timerRef.current) window.clearInterval(timerRef.current);
+    if (timerRef.current) clearInterval(timerRef.current);
     setSeconds(0);
-    timerRef.current = window.setInterval(() => setSeconds((s) => s + 1), 1000);
+    timerRef.current = setInterval(() => setSeconds((s) => s + 1), 1000);
   }
+
   function stopTimer() {
     if (timerRef.current) {
-      window.clearInterval(timerRef.current);
+      clearInterval(timerRef.current);
       timerRef.current = null;
     }
   }
