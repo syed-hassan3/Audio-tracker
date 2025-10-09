@@ -1,52 +1,53 @@
-"use client";
-import { useState, useRef, useEffect } from "react";
+import { useState, useRef, useEffect } from 'react';
 
 export default function AudioRecorder() {
   const [isRecording, setIsRecording] = useState(false);
-  const [transcript, setTranscript] = useState("");
+  const [transcript, setTranscript] = useState('');
   const [audioUrl, setAudioUrl] = useState(null);
-  const [error, setError] = useState("");
+  const [error, setError] = useState('');
   const [recordingTime, setRecordingTime] = useState(0);
   const [isTranscribing, setIsTranscribing] = useState(false);
-
+  const [transcriptionProgress, setTranscriptionProgress] = useState('');
+  
   const mediaRecorderRef = useRef(null);
   const audioChunksRef = useRef([]);
   const recognitionRef = useRef(null);
   const timerRef = useRef(null);
   const streamRef = useRef(null);
 
+  const ASSEMBLYAI_API_KEY = '73d9eea30dcd45e5ab115c4ed66deffb';
+
   useEffect(() => {
     // Check if we're on mobile
     const isMobile = /iPhone|iPad|iPod|Android/i.test(navigator.userAgent);
-
-    // Initialize speech recognition for desktop only
-    if (typeof window !== "undefined" && !isMobile) {
-      const SpeechRecognition =
-        window.SpeechRecognition || window.webkitSpeechRecognition;
-
+    
+    // Initialize speech recognition for desktop only (real-time)
+    if (typeof window !== 'undefined' && !isMobile) {
+      const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+      
       if (SpeechRecognition) {
         recognitionRef.current = new SpeechRecognition();
         recognitionRef.current.continuous = true;
         recognitionRef.current.interimResults = true;
-        recognitionRef.current.lang = "en-US";
+        recognitionRef.current.lang = 'en-US';
 
         recognitionRef.current.onresult = (event) => {
-          let finalTranscript = "";
+          let finalTranscript = '';
 
           for (let i = event.resultIndex; i < event.results.length; i++) {
             const transcriptPiece = event.results[i][0].transcript;
             if (event.results[i].isFinal) {
-              finalTranscript += transcriptPiece + " ";
+              finalTranscript += transcriptPiece + ' ';
             }
           }
 
           if (finalTranscript) {
-            setTranscript((prev) => prev + finalTranscript);
+            setTranscript(prev => prev + finalTranscript);
           }
         };
 
         recognitionRef.current.onerror = (event) => {
-          console.error("Speech recognition error:", event.error);
+          console.error('Speech recognition error:', event.error);
         };
       }
     }
@@ -63,36 +64,111 @@ export default function AudioRecorder() {
     };
   }, []);
 
+  const uploadToAssemblyAI = async (audioBlob) => {
+    setTranscriptionProgress('Uploading audio...');
+    
+    try {
+      // Step 1: Upload the audio file
+      const uploadResponse = await fetch('https://api.assemblyai.com/v2/upload', {
+        method: 'POST',
+        headers: {
+          'authorization': ASSEMBLYAI_API_KEY,
+        },
+        body: audioBlob
+      });
+
+      if (!uploadResponse.ok) {
+        throw new Error('Failed to upload audio');
+      }
+
+      const { upload_url } = await uploadResponse.json();
+      
+      setTranscriptionProgress('Transcribing audio...');
+
+      // Step 2: Request transcription
+      const transcriptResponse = await fetch('https://api.assemblyai.com/v2/transcript', {
+        method: 'POST',
+        headers: {
+          'authorization': ASSEMBLYAI_API_KEY,
+          'content-type': 'application/json',
+        },
+        body: JSON.stringify({
+          audio_url: upload_url,
+          language_code: 'en'
+        })
+      });
+
+      if (!transcriptResponse.ok) {
+        throw new Error('Failed to request transcription');
+      }
+
+      const { id } = await transcriptResponse.json();
+
+      // Step 3: Poll for transcription result
+      let transcriptData;
+      let attempts = 0;
+      const maxAttempts = 60; // 60 attempts = 5 minutes max
+
+      while (attempts < maxAttempts) {
+        setTranscriptionProgress(`Processing... (${attempts + 1})`);
+        
+        await new Promise(resolve => setTimeout(resolve, 3000)); // Wait 3 seconds
+
+        const pollingResponse = await fetch(`https://api.assemblyai.com/v2/transcript/${id}`, {
+          headers: {
+            'authorization': ASSEMBLYAI_API_KEY,
+          }
+        });
+
+        transcriptData = await pollingResponse.json();
+
+        if (transcriptData.status === 'completed') {
+          return transcriptData.text;
+        } else if (transcriptData.status === 'error') {
+          throw new Error('Transcription failed: ' + transcriptData.error);
+        }
+
+        attempts++;
+      }
+
+      throw new Error('Transcription timeout');
+
+    } catch (error) {
+      console.error('AssemblyAI Error:', error);
+      throw error;
+    }
+  };
+
   const startRecording = async () => {
     try {
-      setError("");
-      setTranscript("");
+      setError('');
+      setTranscript('');
       setAudioUrl(null);
       setRecordingTime(0);
       audioChunksRef.current = [];
 
-      const stream = await navigator.mediaDevices.getUserMedia({
+      const stream = await navigator.mediaDevices.getUserMedia({ 
         audio: {
           echoCancellation: true,
           noiseSuppression: true,
-          sampleRate: 44100,
-        },
+          sampleRate: 44100
+        } 
       });
-
+      
       streamRef.current = stream;
 
       // Use different MIME types based on browser support
-      let mimeType = "audio/webm";
-      if (MediaRecorder.isTypeSupported("audio/webm;codecs=opus")) {
-        mimeType = "audio/webm;codecs=opus";
-      } else if (MediaRecorder.isTypeSupported("audio/mp4")) {
-        mimeType = "audio/mp4";
-      } else if (MediaRecorder.isTypeSupported("audio/ogg;codecs=opus")) {
-        mimeType = "audio/ogg;codecs=opus";
+      let mimeType = 'audio/webm';
+      if (MediaRecorder.isTypeSupported('audio/webm;codecs=opus')) {
+        mimeType = 'audio/webm;codecs=opus';
+      } else if (MediaRecorder.isTypeSupported('audio/mp4')) {
+        mimeType = 'audio/mp4';
+      } else if (MediaRecorder.isTypeSupported('audio/ogg;codecs=opus')) {
+        mimeType = 'audio/ogg;codecs=opus';
       }
-
+      
       mediaRecorderRef.current = new MediaRecorder(stream, { mimeType });
-
+      
       mediaRecorderRef.current.ondataavailable = (event) => {
         if (event.data.size > 0) {
           audioChunksRef.current.push(event.data);
@@ -103,15 +179,25 @@ export default function AudioRecorder() {
         const audioBlob = new Blob(audioChunksRef.current, { type: mimeType });
         const url = URL.createObjectURL(audioBlob);
         setAudioUrl(url);
-
+        
         if (streamRef.current) {
-          streamRef.current.getTracks().forEach((track) => track.stop());
+          streamRef.current.getTracks().forEach(track => track.stop());
         }
 
-        // Transcribe audio for mobile devices
+        // Use AssemblyAI for transcription on all devices
         const isMobile = /iPhone|iPad|iPod|Android/i.test(navigator.userAgent);
-        if (isMobile && audioBlob.size > 0) {
-          await transcribeAudioForMobile(audioBlob);
+        if (isMobile) {
+          setIsTranscribing(true);
+          try {
+            const transcribedText = await uploadToAssemblyAI(audioBlob);
+            setTranscript(transcribedText || 'No speech detected in the recording.');
+            setIsTranscribing(false);
+            setTranscriptionProgress('');
+          } catch (error) {
+            setError('Transcription failed: ' + error.message);
+            setIsTranscribing(false);
+            setTranscriptionProgress('');
+          }
         }
       };
 
@@ -120,75 +206,59 @@ export default function AudioRecorder() {
 
       // Start timer
       timerRef.current = setInterval(() => {
-        setRecordingTime((prev) => prev + 1);
+        setRecordingTime(prev => prev + 1);
       }, 1000);
 
-      // Start speech recognition for desktop
+      // Start speech recognition for desktop (real-time)
       const isMobile = /iPhone|iPad|iPod|Android/i.test(navigator.userAgent);
       if (recognitionRef.current && !isMobile) {
         try {
           recognitionRef.current.start();
         } catch (e) {
-          console.log("Recognition error:", e);
+          console.log('Recognition error:', e);
         }
       }
     } catch (err) {
-      setError(
-        "Error accessing microphone. Please allow microphone access and try again."
-      );
-      console.error("Error:", err);
+      setError('Error accessing microphone. Please allow microphone access and try again.');
+      console.error('Error:', err);
     }
   };
 
-  const transcribeAudioForMobile = async (audioBlob) => {
-    setIsTranscribing(true);
-
-    try {
-      // Convert audio to base64
-      const reader = new FileReader();
-      reader.readAsDataURL(audioBlob);
-
-      reader.onloadend = async () => {
-        try {
-          // Use Web Speech API with audio element as fallback
-          const audio = new Audio(URL.createObjectURL(audioBlob));
-
-          // Create a simple transcription message
-          const duration = Math.floor(recordingTime);
-          const transcriptionText = `[Recording completed - ${duration} seconds]\n\nNote: For accurate transcription on mobile devices, please use the desktop version or integrate with a transcription service like OpenAI Whisper, Google Cloud Speech-to-Text, or AssemblyAI.\n\nYour audio has been recorded successfully and can be played back or downloaded.`;
-
-          setTranscript(transcriptionText);
-          setIsTranscribing(false);
-        } catch (error) {
-          console.error("Transcription error:", error);
-          setTranscript(
-            "[Recording completed]\n\nTranscription is not available on this device. Please use the desktop version for real-time transcription, or integrate with a cloud transcription service."
-          );
-          setIsTranscribing(false);
-        }
-      };
-    } catch (error) {
-      console.error("Error in transcription:", error);
-      setTranscript(
-        "[Recording completed]\n\nTranscription service unavailable."
-      );
-      setIsTranscribing(false);
-    }
-  };
-
-  const stopRecording = () => {
+  const stopRecording = async () => {
     if (mediaRecorderRef.current && isRecording) {
       mediaRecorderRef.current.stop();
       setIsRecording(false);
-
+      
       if (timerRef.current) {
         clearInterval(timerRef.current);
       }
-
-      if (recognitionRef.current) {
+      
+      const isMobile = /iPhone|iPad|iPod|Android/i.test(navigator.userAgent);
+      
+      if (recognitionRef.current && !isMobile) {
         try {
           recognitionRef.current.stop();
         } catch (e) {}
+      }
+
+      // For desktop, also use AssemblyAI if browser speech recognition didn't work well
+      if (!isMobile && !transcript) {
+        setIsTranscribing(true);
+        try {
+          // Wait a bit for the blob to be ready
+          await new Promise(resolve => setTimeout(resolve, 500));
+          const audioBlob = new Blob(audioChunksRef.current, { 
+            type: mediaRecorderRef.current.mimeType 
+          });
+          const transcribedText = await uploadToAssemblyAI(audioBlob);
+          setTranscript(transcribedText || 'No speech detected in the recording.');
+          setIsTranscribing(false);
+          setTranscriptionProgress('');
+        } catch (error) {
+          setError('Transcription failed: ' + error.message);
+          setIsTranscribing(false);
+          setTranscriptionProgress('');
+        }
       }
     }
   };
@@ -197,32 +267,34 @@ export default function AudioRecorder() {
     if (mediaRecorderRef.current && isRecording) {
       mediaRecorderRef.current.stop();
       setIsRecording(false);
-
+      
       if (timerRef.current) {
         clearInterval(timerRef.current);
       }
-
+      
       if (recognitionRef.current) {
         try {
           recognitionRef.current.stop();
         } catch (e) {}
       }
-
+      
       if (streamRef.current) {
-        streamRef.current.getTracks().forEach((track) => track.stop());
+        streamRef.current.getTracks().forEach(track => track.stop());
       }
-
+      
       audioChunksRef.current = [];
-      setTranscript("");
+      setTranscript('');
       setAudioUrl(null);
-      setError("");
+      setError('');
       setRecordingTime(0);
+      setIsTranscribing(false);
+      setTranscriptionProgress('');
     }
   };
 
   const downloadAudio = () => {
     if (audioUrl) {
-      const a = document.createElement("a");
+      const a = document.createElement('a');
       a.href = audioUrl;
       a.download = `recording_${Date.now()}.webm`;
       document.body.appendChild(a);
@@ -234,9 +306,7 @@ export default function AudioRecorder() {
   const formatTime = (seconds) => {
     const mins = Math.floor(seconds / 60);
     const secs = seconds % 60;
-    return `${mins.toString().padStart(2, "0")}:${secs
-      .toString()
-      .padStart(2, "0")}`;
+    return `${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
   };
 
   return (
@@ -249,7 +319,7 @@ export default function AudioRecorder() {
 
           {error && (
             <div className="bg-red-50 border border-red-200 text-red-700 px-4 py-3 rounded-lg mb-4 text-sm">
-              {error}
+              ⚠️ {error}
             </div>
           )}
 
@@ -257,9 +327,10 @@ export default function AudioRecorder() {
             {!isRecording ? (
               <button
                 onClick={startRecording}
-                className="bg-blue-600 hover:bg-blue-700 active:bg-blue-800 text-white font-semibold py-4 px-8 rounded-full shadow-lg transition-all duration-200 text-lg w-full sm:w-auto"
+                disabled={isTranscribing}
+                className="bg-blue-600 hover:bg-blue-700 active:bg-blue-800 disabled:bg-gray-400 disabled:cursor-not-allowed text-white font-semibold py-4 px-8 rounded-full shadow-lg transition-all duration-200 text-lg w-full sm:w-auto"
               >
-                🎤 Start your Recording
+                🎤 Start Recording
               </button>
             ) : (
               <>
@@ -290,6 +361,20 @@ export default function AudioRecorder() {
             )}
           </div>
 
+          {isTranscribing && (
+            <div className="bg-blue-50 border-2 border-blue-300 p-4 rounded-lg mb-4">
+              <div className="flex items-center gap-3">
+                <div className="animate-spin rounded-full h-6 w-6 border-b-2 border-t-2 border-blue-600"></div>
+                <div>
+                  <p className="text-blue-800 font-semibold">Transcribing your audio...</p>
+                  {transcriptionProgress && (
+                    <p className="text-blue-600 text-sm mt-1">{transcriptionProgress}</p>
+                  )}
+                </div>
+              </div>
+            </div>
+          )}
+
           {audioUrl && (
             <div className="mb-6 bg-gray-50 p-4 rounded-lg">
               <h2 className="text-lg font-semibold text-gray-700 mb-3">
@@ -302,17 +387,6 @@ export default function AudioRecorder() {
               >
                 💾 Download Recording
               </button>
-            </div>
-          )}
-
-          {isTranscribing && (
-            <div className="bg-yellow-50 border border-yellow-200 p-4 rounded-lg mb-4">
-              <div className="flex items-center gap-3">
-                <div className="animate-spin rounded-full h-5 w-5 border-b-2 border-yellow-600"></div>
-                <span className="text-yellow-800 font-medium">
-                  Processing transcription...
-                </span>
-              </div>
             </div>
           )}
 
@@ -329,27 +403,22 @@ export default function AudioRecorder() {
             </div>
           )}
 
-          {!isRecording && !audioUrl && !transcript && (
+          {!isRecording && !audioUrl && !transcript && !isTranscribing && (
             <div className="text-center text-gray-500 py-8">
               <p className="text-lg mb-2">Click "Start Recording" to begin</p>
-              <p className="text-sm">📱 Works on all devices</p>
+              <p className="text-sm">📱 Works perfectly on all devices</p>
+              <p className="text-xs mt-2 text-green-600 font-semibold">✓ AI-Powered Transcription Enabled</p>
             </div>
           )}
         </div>
 
         <div className="mt-6 bg-white rounded-lg shadow p-4 text-xs sm:text-sm text-gray-600">
-          <p className="font-semibold mb-2">ℹ️ Important Notes:</p>
+          <p className="font-semibold mb-2 text-green-600">✅ Fully Functional on All Devices:</p>
           <ul className="list-disc list-inside space-y-1">
-            <li>Allow microphone access when prompted</li>
-            <li>Real-time transcription works on desktop browsers</li>
-            <li>
-              On mobile: Recording works perfectly, transcription requires cloud
-              service integration
-            </li>
-            <li>
-              For production: Integrate OpenAI Whisper, Google Speech-to-Text,
-              or AssemblyAI
-            </li>
+            <li>✓ Recording works on mobile and desktop</li>
+            <li>✓ AI transcription powered by AssemblyAI</li>
+            <li>✓ Accurate speech-to-text on iPhone, Android, and PC</li>
+            <li>✓ Download your recordings anytime</li>
           </ul>
         </div>
       </div>
