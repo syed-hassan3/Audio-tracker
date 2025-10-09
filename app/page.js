@@ -1,101 +1,359 @@
-import Image from "next/image";
+// import { AnimatedCardBackgroundHover } from "@/components/reusable/AnimatedBG";
+// import { DemoBackgroundPaths } from "@/components/reusable/PathsBackground";
+// import { CursorDemo } from "@/components/reusable/SplashCursor";
+// import Image from "next/image";
 
-export default function Home() {
+// export default function Home() {
+//   return (
+//     <>
+//       <CursorDemo />
+//       {/* <DemoBackgroundPaths /> */}
+//       {/* <AnimatedCardBackgroundHover /> */}
+//     </>
+//   );
+// }
+"use client";
+import React, { useEffect, useMemo, useRef, useState } from "react";
+
+/**
+ * AudioRecorder
+ * - Idle state → shows a circular Record button
+ * - Recording state → shows Stop and Cancel buttons
+ * - After Stop → shows audio player + transcript text (from the Web Speech API)
+ * - Cancel → discards recording & transcript
+ *
+ * Works in modern Chromium/Edge. Safari/Firefox may not support SpeechRecognition;
+ * in that case, recording still works but transcript shows a fallback message.
+ */
+export default function AudioRecorder() {
+  // type RecState = "idle" | "recording" | "recorded";
+
+  const [recState, setRecState] = useState("idle");
+  const [error, setError] = useState(null);
+
+  // MediaRecorder bits
+  const mediaRecorderRef = useRef(null);
+  const chunksRef = useRef([]);
+  const [audioUrl, setAudioUrl] = useState(null);
+
+  // Timer for UX
+  const [seconds, setSeconds] = useState(0);
+  const timerRef = useRef(null);
+
+  // Speech-to-text via Web Speech API
+  const [transcript, setTranscript] = useState("");
+  const [isSttSupported, sttCtor] = useMemo(() => {
+    const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+    return [SR, SR];
+  }, []);
+  const recognitionRef = useRef(null);
+
+  // Clean up object URLs on unmount or when changing recordings
+  useEffect(() => {
+    return () => {
+      if (audioUrl) URL.revokeObjectURL(audioUrl);
+      stopTimer();
+      stopSpeechRecognition();
+      stopMediaRecorder();
+    };
+  }, [audioUrl]);
+
+  function startTimer() {
+    if (timerRef.current) window.clearInterval(timerRef.current);
+    setSeconds(0);
+    timerRef.current = window.setInterval(() => setSeconds((s) => s + 1), 1000);
+  }
+  function stopTimer() {
+    if (timerRef.current) {
+      window.clearInterval(timerRef.current);
+      timerRef.current = null;
+    }
+  }
+
+  async function onStart() {
+    setError(null);
+    setTranscript("");
+    chunksRef.current = [];
+
+    try {
+      // Request mic
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+
+      // Set up MediaRecorder
+      const mr = new MediaRecorder(stream);
+      mediaRecorderRef.current = mr;
+      mr.ondataavailable = (e) => {
+        if (e.data && e.data.size > 0) {
+          chunksRef.current.push(e.data);
+        }
+      };
+      mr.onstop = () => {
+        stream.getTracks().forEach((t) => t.stop());
+        const blob = new Blob(chunksRef.current, { type: "audio/webm" });
+        const url = URL.createObjectURL(blob);
+        setAudioUrl((prev) => {
+          if (prev) URL.revokeObjectURL(prev);
+          return url;
+        });
+        setRecState("recorded");
+        stopTimer();
+        stopSpeechRecognition();
+      };
+
+      mr.start();
+      setRecState("recording");
+      startTimer();
+
+      // Start speech recognition if available
+      if (isSttSupported && sttCtor) {
+        const recognition = new sttCtor();
+        recognitionRef.current = recognition;
+        recognition.continuous = true;
+        recognition.interimResults = true;
+        recognition.lang = "en-US"; // You can make this prop-driven
+
+        let finalText = "";
+        recognition.onresult = (event) => {
+          let interim = "";
+          for (let i = event.resultIndex; i < event.results.length; i++) {
+            const res = event.results[i];
+            if (res.isFinal) {
+              finalText += res[0].transcript;
+            } else {
+              interim += res[0].transcript;
+            }
+          }
+          setTranscript((finalText + " " + interim).trim());
+        };
+        recognition.onerror = (e) => {
+          console.warn("SpeechRecognition error:", e);
+        };
+        recognition.onend = () => {
+          // It may end unexpectedly; keep UX simple and do nothing.
+        };
+        try {
+          recognition.start();
+        } catch (e) {
+          console.warn("SpeechRecognition start failed", e);
+        }
+      }
+    } catch (e) {
+      console.error(e);
+      setError(
+        e?.name === "NotAllowedError"
+          ? "Microphone permission denied."
+          : "Could not start recording."
+      );
+      setRecState("idle");
+      stopSpeechRecognition();
+      stopMediaRecorder();
+      stopTimer();
+    }
+  }
+
+  function stopSpeechRecognition() {
+    try {
+      recognitionRef.current?.stop?.();
+      recognitionRef.current = null;
+    } catch {}
+  }
+
+  function stopMediaRecorder() {
+    const mr = mediaRecorderRef.current;
+    if (mr && mr.state !== "inactive") {
+      try {
+        mr.stop();
+      } catch {}
+    }
+    mediaRecorderRef.current = null;
+  }
+
+  function onStop() {
+    stopMediaRecorder();
+    // onstop handler will finalize blob/url & change state
+  }
+
+  function onCancel() {
+    // Discard the recording and transcript
+    stopSpeechRecognition();
+    if (mediaRecorderRef.current) {
+      try {
+        mediaRecorderRef.current.stop();
+      } catch {}
+    }
+    mediaRecorderRef.current = null;
+    chunksRef.current = [];
+
+    if (audioUrl) {
+      URL.revokeObjectURL(audioUrl);
+      setAudioUrl(null);
+    }
+    setTranscript("");
+    setRecState("idle");
+    stopTimer();
+  }
+
+  function prettyTime(total) {
+    const m = Math.floor(total / 60)
+      .toString()
+      .padStart(2, "0");
+    const s = Math.floor(total % 60)
+      .toString()
+      .padStart(2, "0");
+    return `${m}:${s}`;
+  }
+
   return (
-    <div className="grid grid-rows-[20px_1fr_20px] items-center justify-items-center min-h-screen p-8 pb-20 gap-16 sm:p-20 font-[family-name:var(--font-geist-sans)]">
-      <main className="flex flex-col gap-8 row-start-2 items-center sm:items-start">
-        <Image
-          className="dark:invert"
-          src="/next.svg"
-          alt="Next.js logo"
-          width={180}
-          height={38}
-          priority
-        />
-        <ol className="list-inside list-decimal text-sm text-center sm:text-left font-[family-name:var(--font-geist-mono)]">
-          <li className="mb-2">
-            Get started by editing{" "}
-            <code className="bg-black/[.05] dark:bg-white/[.06] px-1 py-0.5 rounded font-semibold">
-              app/page.js
-            </code>
-            .
-          </li>
-          <li>Save and see your changes instantly.</li>
-        </ol>
+    <div className="w-full max-w-xl mx-auto p-4">
+      <div className="flex items-center justify-between mb-3">
+        <h2 className="text-xl font-semibold">Audio Recorder</h2>
+        <span className="text-sm tabular-nums text-gray-500">
+          {recState === "recording" ? prettyTime(seconds) : null}
+        </span>
+      </div>
 
-        <div className="flex gap-4 items-center flex-col sm:flex-row">
-          <a
-            className="rounded-full border border-solid border-transparent transition-colors flex items-center justify-center bg-foreground text-background gap-2 hover:bg-[#383838] dark:hover:bg-[#ccc] text-sm sm:text-base h-10 sm:h-12 px-4 sm:px-5"
-            href="https://vercel.com/new?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
+      {/* Controls */}
+      <div className="flex items-center gap-3 mb-4">
+        {recState === "idle" && (
+          <IconButton
+            label="Start Recording"
+            onClick={onStart}
+            variant="primary"
           >
-            <Image
-              className="dark:invert"
-              src="/vercel.svg"
-              alt="Vercel logomark"
-              width={20}
-              height={20}
+            <MicIcon />
+          </IconButton>
+        )}
+
+        {recState === "recording" && (
+          <>
+            <IconButton label="Stop" onClick={onStop} variant="danger">
+              <StopIcon />
+            </IconButton>
+            <IconButton label="Cancel" onClick={onCancel} variant="ghost">
+              <CancelIcon />
+            </IconButton>
+          </>
+        )}
+
+        {recState === "recorded" && (
+          <IconButton
+            label="Record Again"
+            onClick={() => {
+              onCancel();
+              onStart();
+            }}
+            variant="primary"
+          >
+            <MicIcon />
+          </IconButton>
+        )}
+      </div>
+
+      {error && <p className="text-sm text-red-600 mb-3">{error}</p>}
+
+      {/* Playback + Transcript */}
+      {recState === "recorded" && (
+        <div className="space-y-4">
+          {audioUrl && (
+            <div className="rounded-2xl border border-gray-200 p-3 shadow-sm">
+              <audio src={audioUrl} controls className="w-full" />
+              <div className="mt-2 text-xs text-gray-500">
+                Format: webm • Size:{" "}
+                {/** size not known without reading blob again */} unknown
+              </div>
+            </div>
+          )}
+
+          <div className="rounded-2xl border border-gray-200 p-3 shadow-sm">
+            <div className="flex items-center justify-between mb-2">
+              <h3 className="font-medium">Transcript</h3>
+              {!isSttSupported && (
+                <span className="text-xs text-amber-600">
+                  Speech-to-text not supported in this browser.
+                </span>
+              )}
+            </div>
+            <textarea
+              className="w-full min-h-[120px] resize-y rounded-xl border border-gray-300 p-3 focus:outline-none focus:ring-2 focus:ring-indigo-500"
+              value={transcript}
+              onChange={(e) => setTranscript(e.target.value)}
+              placeholder={
+                isSttSupported
+                  ? "Your speech will appear here…"
+                  : "Type notes here…"
+              }
             />
-            Deploy now
-          </a>
-          <a
-            className="rounded-full border border-solid border-black/[.08] dark:border-white/[.145] transition-colors flex items-center justify-center hover:bg-[#f2f2f2] dark:hover:bg-[#1a1a1a] hover:border-transparent text-sm sm:text-base h-10 sm:h-12 px-4 sm:px-5 sm:min-w-44"
-            href="https://nextjs.org/docs?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            Read our docs
-          </a>
+            <p className="text-xs text-gray-500 mt-2">
+              Stored in component state. Lift to global store if needed.
+            </p>
+          </div>
         </div>
-      </main>
-      <footer className="row-start-3 flex gap-6 flex-wrap items-center justify-center">
-        <a
-          className="flex items-center gap-2 hover:underline hover:underline-offset-4"
-          href="https://nextjs.org/learn?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-          target="_blank"
-          rel="noopener noreferrer"
-        >
-          <Image
-            aria-hidden
-            src="/file.svg"
-            alt="File icon"
-            width={16}
-            height={16}
-          />
-          Learn
-        </a>
-        <a
-          className="flex items-center gap-2 hover:underline hover:underline-offset-4"
-          href="https://vercel.com/templates?framework=next.js&utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-          target="_blank"
-          rel="noopener noreferrer"
-        >
-          <Image
-            aria-hidden
-            src="/window.svg"
-            alt="Window icon"
-            width={16}
-            height={16}
-          />
-          Examples
-        </a>
-        <a
-          className="flex items-center gap-2 hover:underline hover:underline-offset-4"
-          href="https://nextjs.org?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-          target="_blank"
-          rel="noopener noreferrer"
-        >
-          <Image
-            aria-hidden
-            src="/globe.svg"
-            alt="Globe icon"
-            width={16}
-            height={16}
-          />
-          Go to nextjs.org →
-        </a>
-      </footer>
+      )}
     </div>
+  );
+}
+
+// ————————————————————————————————————————————————————————
+// UI primitives (icon button + inline SVG icons)
+// ————————————————————————————————————————————————————————
+function IconButton({ children, onClick, label, variant = "primary" }) {
+  const classes =
+    variant === "primary"
+      ? "bg-indigo-600 hover:bg-indigo-700 text-white"
+      : variant === "danger"
+      ? "bg-rose-600 hover:bg-rose-700 text-white"
+      : "bg-white hover:bg-gray-50 border border-gray-300 text-gray-700";
+
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      aria-label={label}
+      title={label}
+      className={`inline-flex items-center gap-2 px-4 py-2 rounded-2xl shadow-sm focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500 ${classes}`}
+    >
+      {children}
+      <span className="text-sm font-medium">{label}</span>
+    </button>
+  );
+}
+
+function MicIcon() {
+  return (
+    <svg
+      xmlns="http://www.w3.org/2000/svg"
+      viewBox="0 0 24 24"
+      fill="currentColor"
+      className="h-5 w-5"
+    >
+      <path d="M12 14a3 3 0 0 0 3-3V6a3 3 0 1 0-6 0v5a3 3 0 0 0 3 3Z" />
+      <path d="M5 11a1 1 0 1 0-2 0 9 9 0 0 0 8 8v3a1 1 0 1 0 2 0v-3a9 9 0 0 0 8-8 1 1 0 1 0-2 0 7 7 0 0 1-14 0Z" />
+    </svg>
+  );
+}
+
+function StopIcon() {
+  return (
+    <svg
+      xmlns="http://www.w3.org/2000/svg"
+      viewBox="0 0 24 24"
+      fill="currentColor"
+      className="h-5 w-5"
+    >
+      <path d="M6 6h12v12H6z" />
+    </svg>
+  );
+}
+
+function CancelIcon() {
+  return (
+    <svg
+      xmlns="http://www.w3.org/2000/svg"
+      viewBox="0 0 24 24"
+      fill="currentColor"
+      className="h-5 w-5"
+    >
+      <path d="M6.225 4.811A10 10 0 1 1 4.81 6.225l1.415-1.414Zm2.828 2.829 7.071 7.07-1.414 1.415-7.071-7.07 1.414-1.415Z" />
+    </svg>
   );
 }
