@@ -1,426 +1,585 @@
-"use client"
-import { useState, useRef, useEffect } from 'react';
+"use client";
+import React, { useState, useRef, useEffect } from "react";
+import {
+  Mic,
+  Square,
+  Download,
+  FileText,
+  Loader2,
+  Clock,
+  AlertCircle,
+  CrossIcon,
+  XIcon,
+} from "lucide-react";
 
-export default function AudioRecorder() {
+export default function MeetingRecorder() {
   const [isRecording, setIsRecording] = useState(false);
-  const [transcript, setTranscript] = useState('');
-  const [audioUrl, setAudioUrl] = useState(null);
-  const [error, setError] = useState('');
+  const [transcript, setTranscript] = useState("");
+  const [summary, setSummary] = useState("");
+  const [isGeneratingSummary, setIsGeneratingSummary] = useState(false);
   const [recordingTime, setRecordingTime] = useState(0);
-  const [isTranscribing, setIsTranscribing] = useState(false);
-  const [transcriptionProgress, setTranscriptionProgress] = useState('');
-  
-  const mediaRecorderRef = useRef(null);
-  const audioChunksRef = useRef([]);
+  const [language, setLanguage] = useState("en-US");
+  const [error, setError] = useState("");
+
   const recognitionRef = useRef(null);
   const timerRef = useRef(null);
-  const streamRef = useRef(null);
-
-  const ASSEMBLYAI_API_KEY = '73d9eea30dcd45e5ab115c4ed66deffb';
-
+  const handleClear = () => {
+    setIsRecording(false);
+    setTranscript("");
+    setSummary("");
+    setIsGeneratingSummary(false);
+    setRecordingTime(0);
+    setError("");
+  };
   useEffect(() => {
-    // Check if we're on mobile
-    const isMobile = /iPhone|iPad|iPod|Android/i.test(navigator.userAgent);
-    
-    // Initialize speech recognition for desktop only (real-time)
-    if (typeof window !== 'undefined' && !isMobile) {
-      const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
-      
-      if (SpeechRecognition) {
-        recognitionRef.current = new SpeechRecognition();
-        recognitionRef.current.continuous = true;
-        recognitionRef.current.interimResults = true;
-        recognitionRef.current.lang = 'en-US';
+    if ("webkitSpeechRecognition" in window || "SpeechRecognition" in window) {
+      const SpeechRecognition =
+        window.SpeechRecognition || window.webkitSpeechRecognition;
+      recognitionRef.current = new SpeechRecognition();
+      recognitionRef.current.continuous = true;
+      recognitionRef.current.interimResults = true;
+      recognitionRef.current.lang = language;
 
-        recognitionRef.current.onresult = (event) => {
-          let finalTranscript = '';
+      recognitionRef.current.onresult = (event) => {
+        let interimTranscript = "";
+        let finalTranscript = "";
 
-          for (let i = event.resultIndex; i < event.results.length; i++) {
-            const transcriptPiece = event.results[i][0].transcript;
-            if (event.results[i].isFinal) {
-              finalTranscript += transcriptPiece + ' ';
-            }
+        for (let i = event.resultIndex; i < event.results.length; i++) {
+          const transcriptPiece = event.results[i][0].transcript;
+          if (event.results[i].isFinal) {
+            finalTranscript += transcriptPiece + " ";
+          } else {
+            interimTranscript += transcriptPiece;
           }
+        }
 
-          if (finalTranscript) {
-            setTranscript(prev => prev + finalTranscript);
-          }
-        };
+        if (finalTranscript) {
+          setTranscript((prev) => prev + finalTranscript);
+        }
+      };
 
-        recognitionRef.current.onerror = (event) => {
-          console.error('Speech recognition error:', event.error);
-        };
-      }
+      recognitionRef.current.onerror = (event) => {
+        console.error("Speech recognition error:", event.error);
+        if (event.error === "no-speech") {
+          return;
+        }
+        setError(`Speech recognition error: ${event.error}`);
+      };
+    } else {
+      setError(
+        "Speech recognition is not supported in this browser. Please use Chrome or Edge."
+      );
     }
 
     return () => {
       if (recognitionRef.current) {
-        try {
-          recognitionRef.current.stop();
-        } catch (e) {}
+        recognitionRef.current.stop();
       }
       if (timerRef.current) {
         clearInterval(timerRef.current);
       }
     };
-  }, []);
+  }, [language]);
 
-  const uploadToAssemblyAI = async (audioBlob) => {
-    setTranscriptionProgress('Uploading audio...');
-    
+  const startRecording = () => {
+    setTranscript("");
+    setSummary("");
+    setRecordingTime(0);
+    setError("");
+    setIsRecording(true);
+
+    if (recognitionRef.current) {
+      recognitionRef.current.lang = language;
+      recognitionRef.current.start();
+    }
+
+    timerRef.current = setInterval(() => {
+      setRecordingTime((prev) => prev + 1);
+    }, 1000);
+  };
+
+  const stopRecording = () => {
+    setIsRecording(false);
+
+    if (recognitionRef.current) {
+      recognitionRef.current.stop();
+    }
+
+    if (timerRef.current) {
+      clearInterval(timerRef.current);
+    }
+  };
+
+  const generateSummary = async () => {
+    if (!transcript.trim()) {
+      setError("No transcript available to summarize!");
+      return;
+    }
+
+    if (transcript.split(" ").length < 30) {
+      setError(
+        "Transcript is too short. Please record a longer meeting for better summarization."
+      );
+      return;
+    }
+
+    setIsGeneratingSummary(true);
+    setError("");
+
     try {
-      // Step 1: Upload the audio file
-      const uploadResponse = await fetch('https://api.assemblyai.com/v2/upload', {
-        method: 'POST',
-        headers: {
-          'authorization': ASSEMBLYAI_API_KEY,
-        },
-        body: audioBlob
+      // Using intelligent text extraction algorithm
+      const sentences = transcript.match(/[^.!?]+[.!?]+/g) || [transcript];
+
+      // Extract key information
+      const wordFrequency = {};
+      const words = transcript.toLowerCase().split(/\s+/);
+      const stopWords = new Set([
+        "the",
+        "is",
+        "at",
+        "which",
+        "on",
+        "a",
+        "an",
+        "and",
+        "or",
+        "but",
+        "in",
+        "with",
+        "to",
+        "for",
+        "of",
+        "as",
+        "by",
+        "that",
+        "this",
+        "it",
+        "from",
+        "be",
+        "are",
+        "was",
+        "were",
+        "been",
+        "have",
+        "has",
+        "had",
+        "do",
+        "does",
+        "did",
+        "will",
+        "would",
+        "could",
+        "should",
+        "may",
+        "might",
+        "can",
+      ]);
+
+      words.forEach((word) => {
+        const cleaned = word.replace(/[^\w]/g, "");
+        if (cleaned.length > 3 && !stopWords.has(cleaned)) {
+          wordFrequency[cleaned] = (wordFrequency[cleaned] || 0) + 1;
+        }
       });
 
-      if (!uploadResponse.ok) {
-        throw new Error('Failed to upload audio');
-      }
-
-      const { upload_url } = await uploadResponse.json();
-      
-      setTranscriptionProgress('Transcribing audio...');
-
-      // Step 2: Request transcription
-      const transcriptResponse = await fetch('https://api.assemblyai.com/v2/transcript', {
-        method: 'POST',
-        headers: {
-          'authorization': ASSEMBLYAI_API_KEY,
-          'content-type': 'application/json',
-        },
-        body: JSON.stringify({
-          audio_url: upload_url,
-          language_code: 'en'
-        })
-      });
-
-      if (!transcriptResponse.ok) {
-        throw new Error('Failed to request transcription');
-      }
-
-      const { id } = await transcriptResponse.json();
-
-      // Step 3: Poll for transcription result
-      let transcriptData;
-      let attempts = 0;
-      const maxAttempts = 60; // 60 attempts = 5 minutes max
-
-      while (attempts < maxAttempts) {
-        setTranscriptionProgress(`Processing... (${attempts + 1})`);
-        
-        await new Promise(resolve => setTimeout(resolve, 3000)); // Wait 3 seconds
-
-        const pollingResponse = await fetch(`https://api.assemblyai.com/v2/transcript/${id}`, {
-          headers: {
-            'authorization': ASSEMBLYAI_API_KEY,
+      // Score sentences based on word frequency
+      const sentenceScores = sentences.map((sentence) => {
+        const sentenceWords = sentence.toLowerCase().split(/\s+/);
+        let score = 0;
+        sentenceWords.forEach((word) => {
+          const cleaned = word.replace(/[^\w]/g, "");
+          if (wordFrequency[cleaned]) {
+            score += wordFrequency[cleaned];
           }
         });
-
-        transcriptData = await pollingResponse.json();
-
-        if (transcriptData.status === 'completed') {
-          return transcriptData.text;
-        } else if (transcriptData.status === 'error') {
-          throw new Error('Transcription failed: ' + transcriptData.error);
-        }
-
-        attempts++;
-      }
-
-      throw new Error('Transcription timeout');
-
-    } catch (error) {
-      console.error('AssemblyAI Error:', error);
-      throw error;
-    }
-  };
-
-  const startRecording = async () => {
-    try {
-      setError('');
-      setTranscript('');
-      setAudioUrl(null);
-      setRecordingTime(0);
-      audioChunksRef.current = [];
-
-      const stream = await navigator.mediaDevices.getUserMedia({ 
-        audio: {
-          echoCancellation: true,
-          noiseSuppression: true,
-          sampleRate: 44100
-        } 
+        return { sentence: sentence.trim(), score };
       });
-      
-      streamRef.current = stream;
 
-      // Use different MIME types based on browser support
-      let mimeType = 'audio/webm';
-      if (MediaRecorder.isTypeSupported('audio/webm;codecs=opus')) {
-        mimeType = 'audio/webm;codecs=opus';
-      } else if (MediaRecorder.isTypeSupported('audio/mp4')) {
-        mimeType = 'audio/mp4';
-      } else if (MediaRecorder.isTypeSupported('audio/ogg;codecs=opus')) {
-        mimeType = 'audio/ogg;codecs=opus';
-      }
-      
-      mediaRecorderRef.current = new MediaRecorder(stream, { mimeType });
-      
-      mediaRecorderRef.current.ondataavailable = (event) => {
-        if (event.data.size > 0) {
-          audioChunksRef.current.push(event.data);
-        }
-      };
+      // Sort by score and take top sentences
+      const topSentences = sentenceScores
+        .sort((a, b) => b.score - a.score)
+        .slice(0, Math.min(5, Math.ceil(sentences.length * 0.3)))
+        .map((s) => s.sentence);
 
-      mediaRecorderRef.current.onstop = async () => {
-        const audioBlob = new Blob(audioChunksRef.current, { type: mimeType });
-        const url = URL.createObjectURL(audioBlob);
-        setAudioUrl(url);
-        
-        if (streamRef.current) {
-          streamRef.current.getTracks().forEach(track => track.stop());
-        }
+      // Extract key topics (most frequent words)
+      const keyTopics = Object.entries(wordFrequency)
+        .sort((a, b) => b[1] - a[1])
+        .slice(0, 8)
+        .map(([word]) => word);
 
-        // Use AssemblyAI for transcription on all devices
-        const isMobile = /iPhone|iPad|iPod|Android/i.test(navigator.userAgent);
-        if (isMobile) {
-          setIsTranscribing(true);
-          try {
-            const transcribedText = await uploadToAssemblyAI(audioBlob);
-            setTranscript(transcribedText || 'No speech detected in the recording.');
-            setIsTranscribing(false);
-            setTranscriptionProgress('');
-          } catch (error) {
-            setError('Transcription failed: ' + error.message);
-            setIsTranscribing(false);
-            setTranscriptionProgress('');
-          }
-        }
-      };
+      // Detect action items (sentences with action words)
+      const actionWords = [
+        "will",
+        "should",
+        "need",
+        "must",
+        "have to",
+        "going to",
+        "plan to",
+        "decide",
+        "agree",
+      ];
+      const actionItems = sentences
+        .filter((s) =>
+          actionWords.some((action) => s.toLowerCase().includes(action))
+        )
+        .slice(0, 3);
 
-      mediaRecorderRef.current.start(1000);
-      setIsRecording(true);
+      // Detect decisions (sentences with decision words)
+      const decisionWords = [
+        "decided",
+        "agreed",
+        "concluded",
+        "confirmed",
+        "approved",
+        "determined",
+      ];
+      const decisions = sentences
+        .filter((s) =>
+          decisionWords.some((decision) => s.toLowerCase().includes(decision))
+        )
+        .slice(0, 3);
 
-      // Start timer
-      timerRef.current = setInterval(() => {
-        setRecordingTime(prev => prev + 1);
-      }, 1000);
+      const formattedSummary = `
+📋 MEETING SUMMARY
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-      // Start speech recognition for desktop (real-time)
-      const isMobile = /iPhone|iPad|iPod|Android/i.test(navigator.userAgent);
-      if (recognitionRef.current && !isMobile) {
-        try {
-          recognitionRef.current.start();
-        } catch (e) {
-          console.log('Recognition error:', e);
-        }
-      }
-    } catch (err) {
-      setError('Error accessing microphone. Please allow microphone access and try again.');
-      console.error('Error:', err);
+📌 KEY TOPICS DISCUSSED:
+${keyTopics
+  .map((topic) => `• ${topic.charAt(0).toUpperCase() + topic.slice(1)}`)
+  .join("\n")}
+
+💡 MAIN DISCUSSION POINTS:
+${topSentences.map((s, i) => `${i + 1}. ${s}`).join("\n")}
+
+${
+  decisions.length > 0
+    ? `\n✅ DECISIONS MADE:\n${decisions
+        .map((d, i) => `${i + 1}. ${d}`)
+        .join("\n")}`
+    : ""
+}
+
+${
+  actionItems.length > 0
+    ? `\n🎯 ACTION ITEMS:\n${actionItems
+        .map((a, i) => `${i + 1}. ${a}`)
+        .join("\n")}`
+    : ""
+}
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+⏱️ Meeting Duration: ${formatTime(recordingTime)}
+📝 Total Words: ${transcript.split(" ").length} words
+📊 Sentences: ${sentences.length}
+🎯 Summary Generated: ${new Date().toLocaleString()}
+      `.trim();
+
+      setSummary(formattedSummary);
+    } catch (error) {
+      console.error("Error generating summary:", error);
+      setError("Failed to generate summary. Please try again.");
+    } finally {
+      setIsGeneratingSummary(false);
     }
   };
 
-  const stopRecording = async () => {
-    if (mediaRecorderRef.current && isRecording) {
-      mediaRecorderRef.current.stop();
-      setIsRecording(false);
-      
-      if (timerRef.current) {
-        clearInterval(timerRef.current);
-      }
-      
-      const isMobile = /iPhone|iPad|iPod|Android/i.test(navigator.userAgent);
-      
-      if (recognitionRef.current && !isMobile) {
-        try {
-          recognitionRef.current.stop();
-        } catch (e) {}
-      }
+  const downloadTXT = () => {
+    const content = `
+MEETING TRANSCRIPT & SUMMARY
+═══════════════════════════════════════════════════════════
 
-      // For desktop, also use AssemblyAI if browser speech recognition didn't work well
-      if (!isMobile && !transcript) {
-        setIsTranscribing(true);
-        try {
-          // Wait a bit for the blob to be ready
-          await new Promise(resolve => setTimeout(resolve, 500));
-          const audioBlob = new Blob(audioChunksRef.current, { 
-            type: mediaRecorderRef.current.mimeType 
-          });
-          const transcribedText = await uploadToAssemblyAI(audioBlob);
-          setTranscript(transcribedText || 'No speech detected in the recording.');
-          setIsTranscribing(false);
-          setTranscriptionProgress('');
-        } catch (error) {
-          setError('Transcription failed: ' + error.message);
-          setIsTranscribing(false);
-          setTranscriptionProgress('');
-        }
-      }
-    }
+Meeting Date: ${new Date().toLocaleString()}
+Duration: ${formatTime(recordingTime)}
+Language: ${language === "en-US" ? "English" : "Urdu"}
+
+${
+  summary
+    ? "═══════════════════════════════════════════════════════════\nAI-GENERATED SUMMARY\n═══════════════════════════════════════════════════════════\n\n" +
+      summary +
+      "\n\n"
+    : ""
+}═══════════════════════════════════════════════════════════
+FULL TRANSCRIPT
+═══════════════════════════════════════════════════════════
+
+${transcript}
+
+═══════════════════════════════════════════════════════════
+    `.trim();
+
+    const blob = new Blob([content], { type: "text/plain" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `meeting-${Date.now()}.txt`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
   };
 
-  const cancelRecording = () => {
-    if (mediaRecorderRef.current && isRecording) {
-      mediaRecorderRef.current.stop();
-      setIsRecording(false);
-      
-      if (timerRef.current) {
-        clearInterval(timerRef.current);
-      }
-      
-      if (recognitionRef.current) {
-        try {
-          recognitionRef.current.stop();
-        } catch (e) {}
-      }
-      
-      if (streamRef.current) {
-        streamRef.current.getTracks().forEach(track => track.stop());
-      }
-      
-      audioChunksRef.current = [];
-      setTranscript('');
-      setAudioUrl(null);
-      setError('');
-      setRecordingTime(0);
-      setIsTranscribing(false);
-      setTranscriptionProgress('');
-    }
-  };
+  const downloadDOC = () => {
+    const htmlContent = `
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>Meeting Summary</title>
+  <style>
+    body { font-family: Arial, sans-serif; margin: 40px; line-height: 1.6; }
+    h1 { color: #2563eb; border-bottom: 3px solid #2563eb; padding-bottom: 10px; }
+    h2 { color: #1e40af; margin-top: 30px; }
+    .meta { background: #f3f4f6; padding: 15px; border-radius: 5px; margin: 20px 0; }
+    .summary { background: #dbeafe; padding: 20px; border-radius: 5px; border-left: 4px solid #2563eb; }
+    .transcript { background: #f9fafb; padding: 20px; border-radius: 5px; }
+    pre { white-space: pre-wrap; word-wrap: break-word; }
+  </style>
+</head>
+<body>
+  <h1>📋 Meeting Transcript & Summary</h1>
+  
+  <div class="meta">
+    <p><strong>📅 Meeting Date:</strong> ${new Date().toLocaleString()}</p>
+    <p><strong>⏱️ Duration:</strong> ${formatTime(recordingTime)}</p>
+    <p><strong>🌐 Language:</strong> ${
+      language === "en-US" ? "English" : "Urdu"
+    }</p>
+    <p><strong>📊 Word Count:</strong> ${transcript.split(" ").length} words</p>
+  </div>
+  
+  ${
+    summary
+      ? '<h2>✨ AI-Generated Summary</h2><div class="summary"><pre>' +
+        summary +
+        "</pre></div>"
+      : ""
+  }
+  
+  <h2>📝 Full Transcript</h2>
+  <div class="transcript">
+    <pre>${transcript}</pre>
+  </div>
+  
+  <hr style="margin-top: 40px; border: none; border-top: 1px solid #e5e7eb;">
+  <p style="text-align: center; color: #6b7280; font-size: 12px;">Generated by AI Meeting Recorder</p>
+</body>
+</html>
+    `;
 
-  const downloadAudio = () => {
-    if (audioUrl) {
-      const a = document.createElement('a');
-      a.href = audioUrl;
-      a.download = `recording_${Date.now()}.webm`;
-      document.body.appendChild(a);
-      a.click();
-      document.body.removeChild(a);
-    }
+    const blob = new Blob([htmlContent], {
+      type: "application/msword",
+    });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `meeting-${Date.now()}.doc`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
   };
 
   const formatTime = (seconds) => {
-    const mins = Math.floor(seconds / 60);
+    const hrs = Math.floor(seconds / 3600);
+    const mins = Math.floor((seconds % 3600) / 60);
     const secs = seconds % 60;
-    return `${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
+
+    if (hrs > 0) {
+      return `${hrs}:${mins.toString().padStart(2, "0")}:${secs
+        .toString()
+        .padStart(2, "0")}`;
+    }
+    return `${mins}:${secs.toString().padStart(2, "0")}`;
   };
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-blue-50 to-indigo-100 p-4">
-      <div className="max-w-2xl mx-auto">
-        <div className="bg-white rounded-2xl shadow-xl p-6">
-          <h1 className="text-2xl sm:text-3xl font-bold text-gray-800 mb-6 text-center">
-            🎙️ Audio Recorder
-          </h1>
-
-          {error && (
-            <div className="bg-red-50 border border-red-200 text-red-700 px-4 py-3 rounded-lg mb-4 text-sm">
-              ⚠️ {error}
-            </div>
-          )}
-
-          <div className="flex flex-col items-center gap-4 mb-6">
-            {!isRecording ? (
-              <button
-                onClick={startRecording}
-                disabled={isTranscribing}
-                className="bg-blue-600 hover:bg-blue-700 active:bg-blue-800 disabled:bg-gray-400 disabled:cursor-not-allowed text-white font-semibold py-4 px-8 rounded-full shadow-lg transition-all duration-200 text-lg w-full sm:w-auto"
-              >
-                🎤 Start Recording
-              </button>
-            ) : (
-              <>
-                <div className="text-center mb-2">
-                  <div className="text-3xl font-bold text-red-600 mb-2">
-                    {formatTime(recordingTime)}
-                  </div>
-                  <div className="flex items-center justify-center gap-2 text-red-600">
-                    <div className="w-3 h-3 bg-red-600 rounded-full animate-pulse"></div>
-                    <span className="font-semibold text-sm">Recording...</span>
-                  </div>
-                </div>
-                <div className="flex flex-col sm:flex-row gap-3 w-full">
-                  <button
-                    onClick={stopRecording}
-                    className="bg-green-600 hover:bg-green-700 active:bg-green-800 text-white font-semibold py-4 px-6 rounded-full shadow-lg transition-all duration-200 flex-1"
-                  >
-                    ⏹️ Stop Recording
-                  </button>
-                  <button
-                    onClick={cancelRecording}
-                    className="bg-red-600 hover:bg-red-700 active:bg-red-800 text-white font-semibold py-4 px-6 rounded-full shadow-lg transition-all duration-200 flex-1"
-                  >
-                    ❌ Cancel
-                  </button>
-                </div>
-              </>
-            )}
+    <div className="min-h-screen bg-gradient-to-br from-blue-50 via-indigo-50 to-purple-50 p-4">
+      <div className="max-w-5xl mx-auto">
+        <div className="bg-white rounded-2xl shadow-2xl p-8">
+          {/* Header */}
+          <div className="text-center mb-8">
+            <h1 className="text-4xl font-bold bg-gradient-to-r from-blue-600 to-purple-600 bg-clip-text text-transparent mb-2">
+              AI Meeting Recorder
+            </h1>
+            {/* <p className="text-gray-600">
+              100% Free • Record, transcribe, and summarize your meetings
+              instantly
+            </p> */}
           </div>
 
-          {isTranscribing && (
-            <div className="bg-blue-50 border-2 border-blue-300 p-4 rounded-lg mb-4">
-              <div className="flex items-center gap-3">
-                <div className="animate-spin rounded-full h-6 w-6 border-b-2 border-t-2 border-blue-600"></div>
-                <div>
-                  <p className="text-blue-800 font-semibold">Transcribing your audio...</p>
-                  {transcriptionProgress && (
-                    <p className="text-blue-600 text-sm mt-1">{transcriptionProgress}</p>
-                  )}
-                </div>
-              </div>
+          {/* Error Display */}
+          {error && (
+            <div className="mb-6 p-4 bg-red-50 border border-red-200 rounded-lg flex items-start gap-3">
+              <AlertCircle
+                className="text-red-500 flex-shrink-0 mt-0.5"
+                size={20}
+              />
+              <p className="text-red-700 text-sm">{error}</p>
             </div>
           )}
 
-          {audioUrl && (
-            <div className="mb-6 bg-gray-50 p-4 rounded-lg">
-              <h2 className="text-lg font-semibold text-gray-700 mb-3">
-                📼 Your Recording
-              </h2>
-              <audio controls className="w-full mb-3" src={audioUrl}></audio>
-              <button
-                onClick={downloadAudio}
-                className="bg-indigo-600 hover:bg-indigo-700 active:bg-indigo-800 text-white font-semibold py-3 px-6 rounded-lg shadow transition-all duration-200 w-full"
-              >
-                💾 Download Recording
-              </button>
+          {/* Language Selection */}
+          <div className="mb-6 flex justify-center">
+            <select
+              value={language}
+              onChange={(e) => setLanguage(e.target.value)}
+              disabled={isRecording}
+              className="px-6 py-3 border-2 border-gray-300 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-transparent disabled:opacity-50 disabled:cursor-not-allowed font-medium transition-all"
+            >
+              <option value="en-US">🇬🇧 English</option>
+              <option value="ur-PK">🇵🇰 Urdu</option>
+            </select>
+          </div>
+
+          {/* Recording Controls */}
+          <div className="flex flex-col items-center mb-8">
+            <div className="mb-6">
+              {!isRecording ? (
+                <button
+                  onClick={startRecording}
+                  className="bg-gradient-to-r from-red-500 to-red-600 hover:from-red-600 hover:to-red-700 text-white rounded-full p-10 shadow-2xl transform transition hover:scale-105 active:scale-95"
+                  title="Start Recording"
+                >
+                  <Mic size={56} />
+                </button>
+              ) : (
+                <button
+                  onClick={stopRecording}
+                  className="bg-gradient-to-r from-gray-700 to-gray-800 hover:from-gray-800 hover:to-gray-900 text-white rounded-full p-10 shadow-2xl transform transition hover:scale-105 active:scale-95 animate-pulse"
+                  title="Stop Recording"
+                >
+                  <Square size={56} />
+                </button>
+              )}
             </div>
-          )}
+
+            {isRecording && (
+              <div className="flex items-center gap-3 text-red-500 font-bold text-2xl bg-red-50 px-6 py-3 rounded-full">
+                <div className="w-3 h-3 bg-red-500 rounded-full animate-pulse"></div>
+                <Clock size={28} />
+                <span>{formatTime(recordingTime)}</span>
+              </div>
+            )}
+
+            <p className="text-gray-600 mt-4 text-lg font-medium">
+              {isRecording
+                ? "🎙️ Recording in progress..."
+                : "👆 Click to start recording"}
+            </p>
+          </div>
+
+          {/* Transcript Section */}
 
           {transcript && (
-            <div className="bg-gradient-to-br from-purple-50 to-pink-50 p-4 rounded-lg border-2 border-purple-200">
-              <h2 className="text-lg font-semibold text-gray-700 mb-3 flex items-center gap-2">
-                📝 Transcription
-              </h2>
-              <div className="bg-white p-4 rounded-lg shadow-inner max-h-64 overflow-y-auto">
-                <p className="text-gray-800 whitespace-pre-wrap leading-relaxed text-sm sm:text-base">
+            <div className="mb-6">
+              <div className="flex justify-between items-center mb-3">
+                <h2 className="text-2xl font-bold text-gray-800 flex items-center gap-2">
+                  📝 Transcript
+                  <span className="text-sm font-normal text-gray-500">
+                    ({transcript.split(" ").length} words)
+                  </span>
+                </h2>
+                <div className="flex gap-5">
+                  <button
+                    onClick={handleClear}
+                    className="cursor-pointer bg-gradient-to-r from-red-500 to-red-600 hover:from-red-600 hover:to-red-700 text-white px-6 py-3 rounded-xl flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed transition-all transform hover:scale-105 active:scale-95 font-semibold shadow-lg"
+                  >
+                    <XIcon />
+                    Cancel
+                  </button>
+                  <button
+                    onClick={generateSummary}
+                    disabled={isGeneratingSummary}
+                    className="cursor-pointer bg-gradient-to-r from-blue-500 to-blue-600 hover:from-blue-600 hover:to-blue-700 text-white px-6 py-3 rounded-xl flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed transition-all transform hover:scale-105 active:scale-95 font-semibold shadow-lg"
+                  >
+                    {isGeneratingSummary ? (
+                      <>
+                        <Loader2 className="animate-spin" size={20} />
+                        Generating AI Summary...
+                      </>
+                    ) : (
+                      <>
+                        <FileText size={20} />
+                        Generate AI Summary
+                      </>
+                    )}
+                  </button>
+                </div>
+              </div>
+              <div className="bg-gradient-to-br from-gray-50 to-gray-100 p-6 rounded-xl border-2 border-gray-200 max-h-80 overflow-y-auto shadow-inner">
+                <p className="text-gray-800 whitespace-pre-wrap leading-relaxed">
                   {transcript}
                 </p>
               </div>
             </div>
           )}
 
-          {!isRecording && !audioUrl && !transcript && !isTranscribing && (
-            <div className="text-center text-gray-500 py-8">
-              <p className="text-lg mb-2">Click "Start Recording" to begin</p>
-              <p className="text-sm">📱 Works perfectly on all devices</p>
-              <p className="text-xs mt-2 text-green-600 font-semibold">✓ AI-Powered Transcription Enabled</p>
+          {/* Summary Section */}
+          {summary && (
+            <div className="mb-6">
+              <h2 className="text-2xl font-bold text-gray-800 mb-3 flex items-center gap-2">
+                ✨ AI-Generated Summary
+              </h2>
+              <div className="bg-gradient-to-br from-blue-50 to-indigo-50 p-6 rounded-xl border-2 border-blue-200 shadow-lg">
+                <pre className="text-gray-800 whitespace-pre-wrap font-sans leading-relaxed">
+                  {summary}
+                </pre>
+              </div>
             </div>
           )}
-        </div>
 
-        <div className="mt-6 bg-white rounded-lg shadow p-4 text-xs sm:text-sm text-gray-600">
-          <p className="font-semibold mb-2 text-green-600">✅ Fully Functional on All Devices:</p>
-          <ul className="list-disc list-inside space-y-1">
-            <li>✓ Recording works on mobile and desktop</li>
-            <li>✓ AI transcription powered by AssemblyAI</li>
-            <li>✓ Accurate speech-to-text on iPhone, Android, and PC</li>
-            <li>✓ Download your recordings anytime</li>
-          </ul>
+          {/* Download Options */}
+          {(transcript || summary) && (
+            <div className="flex justify-center gap-4 flex-wrap">
+              <button
+                onClick={downloadTXT}
+                className="cursor-pointer bg-gradient-to-r from-green-500 to-green-600 hover:from-green-600 hover:to-green-700 text-white px-8 py-4 rounded-xl flex items-center gap-3 transition-all transform hover:scale-105 active:scale-95 font-semibold shadow-lg"
+              >
+                <Download size={24} />
+                Download as TXT
+              </button>
+              <button
+                onClick={downloadDOC}
+                className="cursor-pointer bg-gradient-to-r from-indigo-500 to-indigo-600 hover:from-indigo-600 hover:to-indigo-700 text-white px-8 py-4 rounded-xl flex items-center gap-3 transition-all transform hover:scale-105 active:scale-95 font-semibold shadow-lg"
+              >
+                <Download size={24} />
+                Download as DOC
+              </button>
+            </div>
+          )}
+
+          {/* Instructions */}
+          <div className="mt-8 p-6 bg-gradient-to-r from-yellow-50 to-amber-50 border-2 border-yellow-200 rounded-xl shadow-md">
+            <h3 className="font-bold text-yellow-900 mb-3 text-lg flex items-center gap-2">
+              💡 How to Use
+            </h3>
+            <ol className="text-yellow-800 space-y-2 list-decimal list-inside">
+              <li className="font-medium">
+                Select your meeting language (English or Urdu)
+              </li>
+              <li className="font-medium">
+                Click the red microphone button to start recording
+              </li>
+              <li className="font-medium">Speak clearly during your meeting</li>
+              <li className="font-medium">
+                Click the stop button when finished
+              </li>
+              <li className="font-medium">
+                Click "Generate AI Summary" for intelligent insights
+              </li>
+              <li className="font-medium">
+                Download your transcript and summary in TXT or DOC format
+              </li>
+            </ol>
+            {/* <div className="mt-4 pt-4 border-t border-yellow-300">
+              <p className="text-sm text-yellow-700 font-medium">
+                ⚠️ <strong>Important:</strong> Works best in Chrome or Edge
+                browser. Allow microphone access when prompted. First summary
+                might take 20 seconds as the AI model loads.
+              </p>
+            </div> */}
+          </div>
         </div>
       </div>
     </div>
